@@ -1,0 +1,17 @@
+name: model-favorites
+repo: https://github.com/Noshkoto/hermes-model-favorites
+sha: 3a4e3422e60b85251d9484e381a2e7f43917ee38
+description: Star models in Hermes Desktop and pick them from a Favorites list beside the composer.
+maintainer: Noshkoto
+tier: community
+category: desktop
+title: Model Favorites
+requires_hermes: ">=0.19"
+docs_url: https://github.com/Noshkoto/hermes-model-favorites#readme
+version: "1.0.0"
+platforms: []
+capabilities:
+  provides_tools: []
+  provides_hooks: []
+  provides_middleware: []
+  requires_env: []
