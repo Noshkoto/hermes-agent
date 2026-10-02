@@ -652,6 +652,8 @@ export function ModelCatalogMenu({
   // any later user scroll still closes the sub.
   const ignoreListScrollRef = useRef(false)
 
+  // One-shot flag for the scroll handler, not a mirrored atom value.
+  // eslint-disable-next-line no-restricted-syntax
   useEffect(() => {
     const list = listRef.current
     const active = list?.querySelector('[data-kb-active]')
@@ -660,8 +662,6 @@ export function ModelCatalogMenu({
       return
     }
 
-    // One-shot flag consumed by the scroll handler, not a mirrored atom value.
-    // eslint-disable-next-line no-restricted-syntax
     ignoreListScrollRef.current = true
     active.scrollIntoView({ block: 'nearest' })
   }, [kbActiveKey])
