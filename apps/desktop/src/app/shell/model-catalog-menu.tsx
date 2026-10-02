@@ -35,7 +35,7 @@ import { useI18n } from '@/i18n'
 import { triggerHaptic } from '@/lib/haptics'
 import { isSubmitEnter } from '@/lib/ime'
 import { catalogProviderMatches, modelOptionsQueryKey, requestModelOptions } from '@/lib/model-options'
-import { displayModelName, modelDisplayParts } from '@/lib/model-status-label'
+import { displayModelName, modelDisplayParts, providerDisplayName } from '@/lib/model-status-label'
 import { reasoningEffortLabel } from '@/lib/reasoning-effort'
 import { foldIncludes, normalize } from '@/lib/text'
 import { cn } from '@/lib/utils'
@@ -606,10 +606,19 @@ export function ModelCatalogMenu({
     return true
   }
 
+  // Which row's options submenu is open (controlled). Nested list scroll does
+  // not reliably keep a portaled SubContent glued to its trigger — Floating
+  // UI's rAF strategy tracks the parent Content, not this inner overflow
+  // pane — so the OPTIONS panel drifts off its row while the user scrolls.
+  // Closing on list scroll is the honest fix; reopen by hovering again.
+  const [openSubKey, setOpenSubKey] = useState<string | null>(null)
+
   // Only the sub THIS row opened from the keyboard owes focus back to the
   // search field; during mouse use focus never left it, and hover open/close
   // fires constantly.
   const handleSubOpenChange = (open: boolean, key: string) => {
+    setOpenSubKey(prev => (open ? key : prev === key ? null : prev))
+
     const claim = keyboardSubRef.current
 
     if (open || claim?.key !== key) {
@@ -633,10 +642,32 @@ export function ModelCatalogMenu({
 
   // Keep the selected row in view while arrowing through the scrollable list.
   const listRef = useRef<HTMLDivElement>(null)
+  // scrollIntoView fires a scroll event on the list. Consume exactly one such
+  // event so keyboard navigation does not yank an open options sub closed;
+  // any later user scroll still closes the sub.
+  const ignoreListScrollRef = useRef(false)
 
   useEffect(() => {
-    listRef.current?.querySelector('[data-kb-active]')?.scrollIntoView({ block: 'nearest' })
+    const list = listRef.current
+    const active = list?.querySelector('[data-kb-active]')
+
+    if (!list || !active) {
+      return
+    }
+
+    ignoreListScrollRef.current = true
+    active.scrollIntoView({ block: 'nearest' })
   }, [kbActiveKey])
+
+  const closeSubOnListScroll = () => {
+    if (ignoreListScrollRef.current) {
+      ignoreListScrollRef.current = false
+
+      return
+    }
+
+    setOpenSubKey(null)
+  }
 
   const kbRowProps = (key: string) => {
     const active = kbActiveKey === key
@@ -712,7 +743,11 @@ export function ModelCatalogMenu({
           {copy.noModels}
         </DropdownMenuItem>
       ) : hasList ? (
-        <div className="max-h-[max(150px,30dvh)] overflow-y-auto py-0.5" ref={listRef}>
+        <div
+          className="dt-portal-scrollbar dt-portal-scrollbar-always max-h-[max(150px,30dvh)] overflow-y-auto overscroll-contain py-0.5 [scrollbar-gutter:stable]"
+          onScroll={closeSubOnListScroll}
+          ref={listRef}
+        >
           {/* Favorites first — the shortcut the star exists for. The section
               paints nothing with no favorites, and nothing while searching,
               where every match is listed in its provider's place instead. */}
@@ -731,6 +766,7 @@ export function ModelCatalogMenu({
                   loadingModels={loadingModels}
                   onSelect={selectFamily}
                   onSubOpenChange={handleSubOpenChange}
+                  openSub={openSubKey === `${provider.slug}:${family.id}`}
                   provider={provider}
                   search={search}
                   showProvider
@@ -780,6 +816,7 @@ export function ModelCatalogMenu({
                       loadingModels={loadingModels}
                       onSelect={selectFamily}
                       onSubOpenChange={handleSubOpenChange}
+                      openSub={openSubKey === `${group.provider.slug}:${family.id}`}
                       provider={group.provider}
                       search={search}
                     />
@@ -934,10 +971,15 @@ interface ModelFamilyRowProps {
   onSelect: (family: ModelFamily, provider: ModelOptionProvider) => Promise<boolean | void> | void
   /** Keyboard-focus round trip for the sub this row opens (#86966). */
   onSubOpenChange?: (open: boolean, key: string) => void
+  /** Controlled open state for the options submenu — host closes it on list
+   *  scroll so a portaled OPTIONS panel cannot drift off its trigger row. */
+  openSub?: boolean
   provider: ModelOptionProvider
   search: string
   /** Name the provider on the row. On in the Favorites section, where rows
-   *  from every provider sit together and two labs can share a model name. */
+   *  from every provider sit together and two labs can share a model name.
+   *  Favorites also switch the label to the full model id (no prettify, no
+   *  truncate) with the provider as a subtitle under it. */
   showProvider?: boolean
 }
 
@@ -955,6 +997,7 @@ function ModelFamilyRow({
   loadingModels,
   onSelect,
   onSubOpenChange,
+  openSub = false,
   provider,
   search,
   showProvider
@@ -1003,14 +1046,31 @@ function ModelFamilyRow({
     effFast
   )
 
-  // Row meta (provider, variant tag, fast mode, reasoning effort) renders as
-  // discrete badge chips BESIDE the name — not appended to it — so "High"
-  // reads as the model's reasoning setting, never as part of a differently-
-  // named model. The provider chip only paints in the Favorites section,
-  // where rows from every provider sit together.
+  // Favorites sit outside their provider group, so the row has to carry the
+  // full model id (never a prettified short name, never CSS-truncated). The
+  // provider sits under it as a short subtitle — the backend's provider.name
+  // for OAuth rows is a mouthful ("xAI Grok OAuth (SuperGrok / Premium+ …)")
+  // that used to render as an uppercase badge and eat the entire row, leaving
+  // only a clipped provider string. Prefer the short display map, fall back
+  // to the raw name. Provider-group rows keep the short pretty name + chips.
+  const labelText = showProvider ? family.id : name
+  const providerLabel = showProvider
+    ? (() => {
+        const short = providerDisplayName(provider.slug)
+
+        // providerDisplayName falls back to the slug itself when unmapped —
+        // keep the backend's human name in that case.
+        return short.toLowerCase() === provider.slug.trim().toLowerCase() ? provider.name : short
+      })()
+    : provider.name
+
+  // Row meta (variant tag, fast mode, reasoning effort) renders as discrete
+  // badge chips BESIDE the name — not appended to it — so "High" reads as the
+  // model's reasoning setting, never as part of a differently-named model.
+  // Favorites already print the raw id (variant suffix included), so the tag
+  // chip would only double it; skip it there. Provider is a subtitle, not a chip.
   const metaTags = [
-    showProvider ? provider.name : null,
-    tag || null,
+    showProvider ? null : tag || null,
     fastControl.kind !== 'none' && fastControl.on ? copy.fast : null,
     (caps?.reasoning ?? true) && !(isCurrent && current.effortPending)
       ? reasoningEffortLabel(effEffort || defaultEffort, isCurrent ? current.effortWire : undefined)
@@ -1038,7 +1098,7 @@ function ModelFamilyRow({
   const favoriteLabel = favorite ? copy.removeFavorite : copy.addFavorite
 
   return (
-    <DropdownMenuSub onOpenChange={open => onSubOpenChange?.(open, rowKey)}>
+    <DropdownMenuSub onOpenChange={open => onSubOpenChange?.(open, rowKey)} open={openSub}>
       <DropdownMenuSubTrigger
         onClick={event => {
           // Shift-click stars, the same gesture that pins a chat row in the
@@ -1059,7 +1119,15 @@ function ModelFamilyRow({
           }
         }}
         {...kbProps}
-        className={cn(kbProps.className, 'group/model')}
+        className={cn(
+          kbProps.className,
+          'group/model min-w-0',
+          // Favorites rows wrap the full model id onto as many lines as it
+          // needs. `items-start` keeps the star aligned to the first line;
+          // without `whitespace-normal` the menu's default single-line flex
+          // lets overflow-x-hidden on the panel clip the id mid-token.
+          showProvider && 'h-auto items-start whitespace-normal'
+        )}
       >
         {/* The star IS the favorite control: filled when starred, a quiet
             outline otherwise. Its click never reaches the row, so starring
@@ -1086,13 +1154,39 @@ function ModelFamilyRow({
             <Codicon name={favorite ? 'star-full' : 'star-empty'} size="0.75rem" />
           </button>
         </Tip>
-        <span className="flex min-w-0 flex-1 items-center gap-1.5">
+        <span className={cn('flex min-w-0 flex-1 gap-1.5', showProvider ? 'items-start' : 'items-center')}>
           {decoration.icon !== undefined ? <ModelMenuRowIcon icon={decoration.icon} /> : null}
-          <span className="min-w-0 truncate">
-            <HighlightMatches foldSeparators query={search} text={name} />
+          <span className="min-w-0 flex-1 overflow-hidden">
+            {/* Full model id on favorites: wrap anywhere so a long slug never
+                gets clipped by the panel's overflow-x-hidden. Provider groups
+                keep the single-line truncate + pretty name. */}
+            <span
+              className={cn('block max-w-full', showProvider ? 'whitespace-normal break-all' : 'truncate')}
+              style={showProvider ? { overflowWrap: 'anywhere', wordBreak: 'break-word' } : undefined}
+              // Native title tooltips park on the viewport and drift while the
+              // list scrolls — same class of bug as the OPTIONS panel. Skip
+              // when the full id is already the primary label (favorites).
+              title={showProvider ? undefined : family.id}
+            >
+              <HighlightMatches foldSeparators query={search} text={labelText} />
+            </span>
+            {showProvider ? (
+              <span
+                className="mt-0.5 block max-w-full whitespace-normal text-[0.625rem] leading-tight text-(--ui-text-tertiary)"
+                style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+                title={provider.name}
+              >
+                {providerLabel}
+              </span>
+            ) : null}
           </span>
           {metaTags.map(chip => (
-            <Badge className="shrink-0 uppercase tracking-wide" key={chip} size="xs" variant="muted">
+            <Badge
+              className={cn('shrink-0 uppercase tracking-wide', showProvider && 'mt-0.5')}
+              key={chip}
+              size="xs"
+              variant="muted"
+            >
               {chip}
             </Badge>
           ))}
