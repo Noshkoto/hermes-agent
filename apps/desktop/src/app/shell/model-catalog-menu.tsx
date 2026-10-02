@@ -4,6 +4,7 @@ import { useStore } from '@nanostores/react'
 import { useQuery } from '@tanstack/react-query'
 import {
   createContext,
+  Fragment,
   type ReactElement,
   type ReactNode,
   useContext,
@@ -35,7 +36,7 @@ import { useI18n } from '@/i18n'
 import { triggerHaptic } from '@/lib/haptics'
 import { isSubmitEnter } from '@/lib/ime'
 import { catalogProviderMatches, modelOptionsQueryKey, requestModelOptions } from '@/lib/model-options'
-import { displayModelName, modelDisplayParts, providerDisplayName } from '@/lib/model-status-label'
+import { displayModelName, modelDisplayParts } from '@/lib/model-status-label'
 import { reasoningEffortLabel } from '@/lib/reasoning-effort'
 import { foldIncludes, normalize } from '@/lib/text'
 import { cn } from '@/lib/utils'
@@ -347,6 +348,10 @@ export function ModelCatalogMenu({
   // listed twice in one open menu. Not while searching: a query lists every
   // match in its provider's place.
   const favoriteSet = useMemo(() => new Set(favoriteKeys), [favoriteKeys])
+  // Favorites that mix providers name each provider once, as a quiet label
+  // over its rows (two labs can serve the same model name). With one provider
+  // the label would only repeat the section.
+  const favoritesSpanProviders = new Set(favoriteRows.map(row => row.provider.slug)).size > 1
 
   const groups = useMemo(
     () =>
@@ -754,23 +759,27 @@ export function ModelCatalogMenu({
           {favoriteRows.length > 0 ? (
             <DropdownMenuGroup className="py-0.5">
               <DropdownMenuLabel className={catalogGroupLabel}>{copy.favorites}</DropdownMenuLabel>
-              {favoriteRows.map(({ family, provider }) => (
-                <ModelFamilyRow
-                  controller={controller}
-                  current={current}
-                  defaultEffort={defaultEffort}
-                  family={family}
-                  favorite
-                  kbProps={kbRowProps(`${provider.slug}:${family.id}`)}
-                  key={`${provider.slug}:${family.id}`}
-                  loadingModels={loadingModels}
-                  onSelect={selectFamily}
-                  onSubOpenChange={handleSubOpenChange}
-                  openSub={openSubKey === `${provider.slug}:${family.id}`}
-                  provider={provider}
-                  search={search}
-                  showProvider
-                />
+              {favoriteRows.map(({ family, provider }, index) => (
+                <Fragment key={`${provider.slug}:${family.id}`}>
+                  {favoritesSpanProviders && favoriteRows[index - 1]?.provider.slug !== provider.slug ? (
+                    <DropdownMenuLabel className={favoriteProviderLabel}>{provider.name}</DropdownMenuLabel>
+                  ) : null}
+                  <ModelFamilyRow
+                    controller={controller}
+                    current={current}
+                    defaultEffort={defaultEffort}
+                    family={family}
+                    favorite
+                    fullId
+                    kbProps={kbRowProps(`${provider.slug}:${family.id}`)}
+                    loadingModels={loadingModels}
+                    onSelect={selectFamily}
+                    onSubOpenChange={handleSubOpenChange}
+                    openSub={openSubKey === `${provider.slug}:${family.id}`}
+                    provider={provider}
+                    search={search}
+                  />
+                </Fragment>
               ))}
             </DropdownMenuGroup>
           ) : null}
@@ -938,8 +947,10 @@ interface FavoriteRow {
 }
 
 /** Resolve stored favorites into paintable rows, in the order the user
- *  starred them. A key with no family in THIS catalog yields no row — and is
- *  not dropped, so it comes back when its provider reconnects. */
+ *  starred them, gathered under the provider each first appeared with so the
+ *  section can name a provider once rather than on every row. A key with no
+ *  family in THIS catalog yields no row — and is not dropped, so it comes back
+ *  when its provider reconnects. */
 function resolveFavoriteRows(providers: readonly ModelOptionProvider[], keys: readonly string[]): FavoriteRow[] {
   const byKey = new Map<string, FavoriteRow>()
 
@@ -949,11 +960,17 @@ function resolveFavoriteRows(providers: readonly ModelOptionProvider[], keys: re
     }
   }
 
-  return keys.flatMap(key => {
+  const byProvider = new Map<string, FavoriteRow[]>()
+
+  for (const key of keys) {
     const row = byKey.get(key)
 
-    return row ? [row] : []
-  })
+    if (row) {
+      byProvider.set(row.provider.slug, [...(byProvider.get(row.provider.slug) ?? []), row])
+    }
+  }
+
+  return [...byProvider.values()].flat()
 }
 
 interface ModelFamilyRowProps {
@@ -976,11 +993,9 @@ interface ModelFamilyRowProps {
   openSub?: boolean
   provider: ModelOptionProvider
   search: string
-  /** Name the provider on the row. On in the Favorites section, where rows
-   *  from every provider sit together and two labs can share a model name.
-   *  Favorites also switch the label to the full model id (no prettify, no
-   *  truncate) with the provider as a subtitle under it. */
-  showProvider?: boolean
+  /** Paint the full model id (wrapped, no prettify/truncate). Set in the
+   *  Favorites section, where the id is the row's identity. */
+  fullId?: boolean
 }
 
 /** One model family row: the favorite star, the trigger that commits the
@@ -993,14 +1008,14 @@ function ModelFamilyRow({
   defaultEffort,
   family,
   favorite,
+  fullId = false,
   kbProps,
   loadingModels,
   onSelect,
   onSubOpenChange,
   openSub = false,
   provider,
-  search,
-  showProvider
+  search
 }: ModelFamilyRowProps): ReactElement {
   const { t } = useI18n()
   const copy = t.shell.modelMenu
@@ -1046,36 +1061,19 @@ function ModelFamilyRow({
     effFast
   )
 
-  // Favorites sit outside their provider group, so the row has to carry the
-  // full model id (never a prettified short name, never CSS-truncated). The
-  // provider sits under it as a short subtitle — the backend's provider.name
-  // for OAuth rows is a mouthful ("xAI Grok OAuth (SuperGrok / Premium+ …)")
-  // that used to render as an uppercase badge and eat the entire row, leaving
-  // only a clipped provider string. Prefer the short display map, fall back
-  // to the raw name. Provider-group rows keep the short pretty name + chips.
-  const labelText = showProvider ? family.id : name
-  const providerLabel = showProvider
-    ? (() => {
-        const short = providerDisplayName(provider.slug)
-
-        // providerDisplayName falls back to the slug itself when unmapped —
-        // keep the backend's human name in that case.
-        return short.toLowerCase() === provider.slug.trim().toLowerCase() ? provider.name : short
-      })()
-    : provider.name
-
-  // Row meta (variant tag, fast mode, reasoning effort) renders as discrete
-  // badge chips BESIDE the name — not appended to it — so "High" reads as the
-  // model's reasoning setting, never as part of a differently-named model.
-  // Favorites already print the raw id (variant suffix included), so the tag
-  // chip would only double it; skip it there. Provider is a subtitle, not a chip.
-  const metaTags = [
-    showProvider ? null : tag || null,
+  // Identity on the left, settings on the right. The name and its variant tag
+  // (`…-flash`, `…-preview`: WHICH model) lead; fast and effort are how this
+  // row is SET, so they sit by the caret that edits them instead of queueing
+  // after the name (#130349). The provider is never a per-row chip; a mixed
+  // Favorites section names it once over its rows. An inherited effort would
+  // be the same chip on every row, so it shows only on the active model and
+  // on a row whose remembered preset chose one.
+  const settings = [
     fastControl.kind !== 'none' && fastControl.on ? copy.fast : null,
-    (caps?.reasoning ?? true) && !(isCurrent && current.effortPending)
+    (caps?.reasoning ?? true) && (isCurrent ? !current.effortPending : Boolean(effEffort))
       ? reasoningEffortLabel(effEffort || defaultEffort, isCurrent ? current.effortWire : undefined)
       : null
-  ].filter((chip): chip is string => Boolean(chip))
+  ].filter((setting): setting is string => Boolean(setting))
 
   // Clicking the row commits the model and closes; the edit submenu
   // (reasoning/fast) is reached by HOVER, so you can tweak those without
@@ -1126,7 +1124,7 @@ function ModelFamilyRow({
           // needs. `items-start` keeps the star aligned to the first line;
           // without `whitespace-normal` the menu's default single-line flex
           // lets overflow-x-hidden on the panel clip the id mid-token.
-          showProvider && 'h-auto items-start whitespace-normal'
+          fullId && 'h-auto items-start whitespace-normal'
         )}
       >
         {/* The star IS the favorite control: filled when starred, a quiet
@@ -1154,42 +1152,24 @@ function ModelFamilyRow({
             <Codicon name={favorite ? 'star-full' : 'star-empty'} size="0.75rem" />
           </button>
         </Tip>
-        <span className={cn('flex min-w-0 flex-1 gap-1.5', showProvider ? 'items-start' : 'items-center')}>
+        <span className={cn('flex min-w-0 flex-1 gap-1.5', fullId ? 'items-start' : 'items-center')}>
           {decoration.icon !== undefined ? <ModelMenuRowIcon icon={decoration.icon} /> : null}
           <span className="min-w-0 flex-1 overflow-hidden">
             {/* Full model id on favorites: wrap anywhere so a long slug never
                 gets clipped by the panel's overflow-x-hidden. Provider groups
                 keep the single-line truncate + pretty name. */}
             <span
-              className={cn('block max-w-full', showProvider ? 'whitespace-normal break-all' : 'truncate')}
-              style={showProvider ? { overflowWrap: 'anywhere', wordBreak: 'break-word' } : undefined}
+              className={cn('block max-w-full', fullId ? 'whitespace-normal break-all' : 'truncate')}
+              style={fullId ? { overflowWrap: 'anywhere', wordBreak: 'break-word' } : undefined}
               // Native title tooltips park on the viewport and drift while the
               // list scrolls — same class of bug as the OPTIONS panel. Skip
               // when the full id is already the primary label (favorites).
-              title={showProvider ? undefined : family.id}
+              title={fullId ? undefined : family.id}
             >
-              <HighlightMatches foldSeparators query={search} text={labelText} />
+              <HighlightMatches foldSeparators query={search} text={fullId ? family.id : name} />
             </span>
-            {showProvider ? (
-              <span
-                className="mt-0.5 block max-w-full whitespace-normal text-[0.625rem] leading-tight text-(--ui-text-tertiary)"
-                style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
-                title={provider.name}
-              >
-                {providerLabel}
-              </span>
-            ) : null}
           </span>
-          {metaTags.map(chip => (
-            <Badge
-              className={cn('shrink-0 uppercase tracking-wide', showProvider && 'mt-0.5')}
-              key={chip}
-              size="xs"
-              variant="muted"
-            >
-              {chip}
-            </Badge>
-          ))}
+          {tag && !fullId ? <ModelChip>{tag}</ModelChip> : null}
           {decoration.badge ? (
             <Badge className="shrink-0 uppercase tracking-wide" data-model-menu-row-badge="" size="xs" variant="muted">
               {decoration.badge}
@@ -1197,7 +1177,7 @@ function ModelFamilyRow({
           ) : null}
         </span>
         {loadProgress ? (
-          <span className="ml-auto flex shrink-0 items-center gap-1.5" title={copyPicker.loadingIntoMemory}>
+          <span className="flex shrink-0 items-center gap-1.5" title={copyPicker.loadingIntoMemory}>
             <span className="h-1 w-14 overflow-hidden rounded-full bg-(--ui-bg-tertiary)">
               <span
                 className="block h-full rounded-full bg-primary transition-[width] duration-500"
@@ -1208,9 +1188,12 @@ function ModelFamilyRow({
           </span>
         ) : null}
         {showPricing && pricing ? <ModelPrice pricing={pricing} /> : null}
-        {isCurrent ? (
-          <Codicon className={cn('text-foreground', loadProgress ? 'ml-1' : 'ml-auto')} name="check" size="0.75rem" />
-        ) : null}
+        {settings.map(setting => (
+          <ModelChip key={setting} setting>
+            {setting}
+          </ModelChip>
+        ))}
+        {isCurrent ? <Codicon className="text-foreground" name="check" size="0.75rem" /> : null}
       </DropdownMenuSubTrigger>
       <ModelEditSubmenu
         canDisableReasoning={caps?.can_disable_reasoning ?? undefined}
@@ -1246,6 +1229,22 @@ const LOCAL_PROVIDER_SLUG = 'llamacpp'
 // Heading for every row group in the list (Favorites, providers, downloads).
 const catalogGroupLabel =
   'px-2 pb-0.5 pt-0.5 text-[0.625rem] font-semibold uppercase tracking-wider text-(--ui-text-tertiary)'
+
+// A provider inside a mixed Favorites section: the group heading's ink, set
+// in normal case and indented to the model names it labels, so it reads as
+// a sub-group rather than a sibling section.
+const favoriteProviderLabel = 'pt-1.5 pb-0 pr-2 pl-7.75 text-[0.625rem] text-(--ui-text-tertiary)'
+
+/** The picker's chips: a filled tag for what the model IS (its variant), an
+ *  outlined one for how this row is SET (fast, effort), so the two read as
+ *  different kinds of fact at a glance. */
+function ModelChip({ children, setting = false }: { children: ReactNode; setting?: boolean }): ReactElement {
+  return (
+    <Badge className="shrink-0 uppercase tracking-wide" size="xs" variant={setting ? 'outline' : 'muted'}>
+      {children}
+    </Badge>
+  )
+}
 
 // A model still downloading: visible so the user knows it's coming (and
 // where it will land), disabled so it can't be selected early, with the

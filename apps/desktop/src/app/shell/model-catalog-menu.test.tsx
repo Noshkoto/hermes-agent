@@ -273,24 +273,53 @@ describe('the catalog owns favorite models', () => {
 
     renderMenu()
 
-    // Favorites paint the full model id (not the prettified short name the
-    // provider groups use), so a long slug stays readable in the mixed list.
-    const rows = (await screen.findAllByText('gemini-2.5-flash')).map(node => node.closest('[role="menuitem"]')!)
+    // Favorites paint the full model id, not the prettified provider-group name.
+    await screen.findByText('gemini-2.5-flash')
 
-    // The section label comes before the provider group heading (the LAST
-    // 'Google' text — the favorite row's provider subtitle paints one first).
     const label = screen.getByText('Favorites')
-    const googleTexts = screen.getAllByText('Google')
-    const googleHeading = googleTexts[googleTexts.length - 1]
+    const googleHeading = screen.getByText('Google')
 
     expect(label.compareDocumentPosition(googleHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-
-    // The provider subtitle names the row's provider, so two labs sharing a
-    // model id stay apart in the mixed section.
-    expect(rows.some(row => row.textContent?.includes('Google'))).toBe(true)
   })
 
-  it('shows the full model id and a short provider subtitle, never a long OAuth badge', async () => {
+  it('names each provider once over its favorites when the section mixes providers', async () => {
+    getGlobalModelOptions.mockResolvedValue({
+      providers: [
+        { models: ['gemini-3.1-pro', 'gemini-2.5-flash'], name: 'Google', slug: 'google' },
+        { models: ['gemini-3.1-pro'], name: 'OpenRouter', slug: 'openrouter' }
+      ]
+    })
+    // Starred out of provider order: the section still gathers each
+    // provider's favorites under one label, in the order they were starred.
+    toggleFavoriteModel('google', 'gemini-3.1-pro')
+    toggleFavoriteModel('openrouter', 'gemini-3.1-pro')
+    toggleFavoriteModel('google', 'gemini-2.5-flash')
+
+    renderMenu()
+
+    await screen.findByText('Favorites')
+
+    const rows = screen.getAllByText(/gemini-(3\.1|2\.5)/).map(node => node.textContent)
+
+    // One label per provider, never one per row, and each provider's
+    // favorites sit together under it.
+    expect(screen.getAllByText('Google')).toHaveLength(1)
+    expect(screen.getAllByText('OpenRouter')).toHaveLength(1)
+    expect(rows).toEqual(['gemini-3.1-pro', 'gemini-2.5-flash', 'gemini-3.1-pro'])
+  })
+
+  it('does not label the provider when every favorite shares one', async () => {
+    toggleFavoriteModel('google', 'gemini-2.5-flash')
+
+    renderMenu()
+
+    await screen.findByText('Favorites')
+
+    // Only Google's own group heading, never a label inside Favorites.
+    expect(screen.getAllByText('Google')).toHaveLength(1)
+  })
+
+  it('shows the full model id, never a long OAuth badge', async () => {
     // Reproduces the live bug: xAI OAuth's backend name is a mouthful that
     // used to render as an uppercase badge and eat the row, leaving only a
     // clipped "XAI GROK OAUTH (SUPERGROK / PREMIUM+" string.
@@ -313,11 +342,8 @@ describe('the catalog owns favorite models', () => {
     // Full id is present as its own text node — not truncated away.
     expect(screen.getByText(longId)).toBeTruthy()
 
-    // Short mapped provider name under it; the long OAuth string is NOT a
-    // visible uppercase badge (it can still ride on the subtitle's title=
-    // attribute for hover, which is fine).
+    // The long OAuth string is not a badge on the row.
     const row = screen.getByText(longId).closest('[role="menuitem"]')!
-    expect(row.textContent).toContain('xAI Grok')
     expect(row.textContent).not.toMatch(/SuperGrok/i)
     expect(row.querySelector('[data-slot="badge"]')?.textContent ?? '').not.toMatch(/xAI|OAuth|SuperGrok/i)
   })
