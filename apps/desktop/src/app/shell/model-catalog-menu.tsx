@@ -660,6 +660,8 @@ export function ModelCatalogMenu({
       return
     }
 
+    // One-shot flag consumed by the scroll handler, not a mirrored atom value.
+    // eslint-disable-next-line no-restricted-syntax
     ignoreListScrollRef.current = true
     active.scrollIntoView({ block: 'nearest' })
   }, [kbActiveKey])
