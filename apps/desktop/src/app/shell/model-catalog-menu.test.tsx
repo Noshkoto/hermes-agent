@@ -618,7 +618,7 @@ describe('the per-row options submenu is discoverable', () => {
     fireEvent.keyDown(input, { key: 'ArrowRight' })
     expect(await screen.findByText('Effort')).not.toBeNull()
 
-    const list = document.querySelector('.dt-portal-scrollbar-always')
+    const list = window.document.querySelector('.dt-portal-scrollbar-always')
 
     expect(list).not.toBeNull()
 
