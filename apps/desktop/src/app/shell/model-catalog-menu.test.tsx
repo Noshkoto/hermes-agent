@@ -342,10 +342,38 @@ describe('the catalog owns favorite models', () => {
     // Full id is present as its own text node — not truncated away.
     expect(screen.getByText(longId)).toBeTruthy()
 
-    // The long OAuth string is not a badge on the row.
+    // The row names the provider without the plan parenthetical, and that
+    // string is not an uppercase badge.
     const row = screen.getByText(longId).closest('[role="menuitem"]')!
+    expect(row.textContent).toContain('xAI Grok OAuth')
     expect(row.textContent).not.toMatch(/SuperGrok/i)
     expect(row.querySelector('[data-slot="badge"]')?.textContent ?? '').not.toMatch(/xAI|OAuth|SuperGrok/i)
+  })
+
+  it('names a mixed favorites section with the short provider name, once', async () => {
+    getGlobalModelOptions.mockResolvedValue({
+      providers: [
+        {
+          models: ['grok-4'],
+          name: 'xAI Grok OAuth (SuperGrok / Premium+ Plan)',
+          slug: 'xai-oauth'
+        },
+        { models: ['gemini-2.5-flash'], name: 'Google', slug: 'google' }
+      ]
+    })
+    toggleFavoriteModel('xai-oauth', 'grok-4')
+    toggleFavoriteModel('google', 'gemini-2.5-flash')
+
+    renderMenu()
+
+    await screen.findByText('Favorites')
+
+    // The section heading is the short name. The row does not repeat it,
+    // and the plan parenthetical is not painted anywhere in the menu —
+    // both of this provider's models are in Favorites, so no group remains.
+    expect(screen.getAllByText('xAI Grok OAuth')).toHaveLength(1)
+    expect(screen.getByText('grok-4').closest('[role="menuitem"]')?.textContent).not.toContain('xAI Grok OAuth')
+    expect(screen.queryByText(/SuperGrok/)).toBeNull()
   })
 
   it('does not also list a favorite under its provider', async () => {
@@ -650,10 +678,8 @@ describe('the per-row options submenu is discoverable', () => {
 
     expect(list).not.toBeNull()
 
-    // Keyboard ArrowDown may have primed a one-shot ignore for scrollIntoView;
-    // a real user wheel always arrives as a later scroll. Fire twice so the
-    // ignore (if any) is consumed and the close still runs.
-    fireEvent.scroll(list as Element)
+    // ArrowDown calls scrollIntoView. When that does not move the list it
+    // must not arm the ignore, so the first real scroll still closes.
     fireEvent.scroll(list as Element)
 
     await waitFor(() => expect(screen.queryByText('Effort')).toBeNull())

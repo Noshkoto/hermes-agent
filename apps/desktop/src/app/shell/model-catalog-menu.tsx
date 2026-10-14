@@ -364,8 +364,9 @@ export function ModelCatalogMenu({
   // match in its provider's place.
   const favoriteSet = useMemo(() => new Set(favoriteKeys), [favoriteKeys])
   // Favorites that mix providers name each provider once, as a quiet label
-  // over its rows (two labs can serve the same model name). With one provider
-  // the label would only repeat the section.
+  // over its rows (two labs can serve the same model name). The label is the
+  // short name — a plan parenthetical is not a heading. With one provider
+  // the label would only repeat the section, so a long name goes on the row.
   const favoritesSpanProviders = new Set(favoriteRows.map(row => row.provider.slug)).size > 1
 
   const groups = useMemo(
@@ -673,9 +674,10 @@ export function ModelCatalogMenu({
 
   // Keep the selected row in view while arrowing through the scrollable list.
   const listRef = useRef<HTMLDivElement>(null)
-  // scrollIntoView fires a scroll event on the list. Consume exactly one such
-  // event so keyboard navigation does not yank an open options sub closed;
-  // any later user scroll still closes the sub.
+  // scrollIntoView fires a scroll event only when the row actually moves.
+  // Swallow that one event so keyboard navigation does not close an open
+  // options sub. A row already in view must NOT arm the flag — otherwise the
+  // user's next wheel is dropped and the OPTIONS panel drifts off its row.
   const ignoreListScrollRef = useRef(false)
 
   // One-shot flag for the scroll handler, not a mirrored atom value.
@@ -688,8 +690,14 @@ export function ModelCatalogMenu({
       return
     }
 
+    const top = list.scrollTop
+
     ignoreListScrollRef.current = true
     active.scrollIntoView({ block: 'nearest' })
+
+    if (list.scrollTop === top) {
+      ignoreListScrollRef.current = false
+    }
   }, [kbActiveKey])
 
   const closeSubOnListScroll = () => {
@@ -788,28 +796,41 @@ export function ModelCatalogMenu({
           {favoriteRows.length > 0 ? (
             <DropdownMenuGroup className="py-0.5">
               <DropdownMenuLabel className={catalogGroupLabel}>{copy.favorites}</DropdownMenuLabel>
-              {favoriteRows.map(({ family, provider }, index) => (
-                <Fragment key={`${provider.slug}:${family.id}`}>
-                  {favoritesSpanProviders && favoriteRows[index - 1]?.provider.slug !== provider.slug ? (
-                    <DropdownMenuLabel className={favoriteProviderLabel}>{provider.name}</DropdownMenuLabel>
-                  ) : null}
-                  <ModelFamilyRow
-                    controller={controller}
-                    current={current}
-                    defaultEffort={defaultEffort}
-                    family={family}
-                    favorite
-                    fullId
-                    kbProps={kbRowProps(`${provider.slug}:${family.id}`)}
-                    loadingModels={loadingModels}
-                    onSelect={selectFamily}
-                    onSubOpenChange={handleSubOpenChange}
-                    openSub={openSubKey === `${provider.slug}:${family.id}`}
-                    provider={provider}
-                    search={search}
-                  />
-                </Fragment>
-              ))}
+              {favoriteRows.map(({ family, provider }, index) => {
+                const providerLabel = shortProviderName(provider.name)
+                // A long OAuth name ("… (SuperGrok / Premium+)") is shortened
+                // once. Mixed sections name the provider in the heading; a
+                // single-provider section has no heading, so the short name
+                // sits on the row instead of the plan parenthetical.
+                const providerSubtitle =
+                  !favoritesSpanProviders && providerLabel !== provider.name ? providerLabel : undefined
+
+                return (
+                  <Fragment key={`${provider.slug}:${family.id}`}>
+                    {favoritesSpanProviders && favoriteRows[index - 1]?.provider.slug !== provider.slug ? (
+                      <DropdownMenuLabel className={cn(favoriteProviderLabel, 'truncate')}>
+                        {providerLabel}
+                      </DropdownMenuLabel>
+                    ) : null}
+                    <ModelFamilyRow
+                      controller={controller}
+                      current={current}
+                      defaultEffort={defaultEffort}
+                      family={family}
+                      favorite
+                      fullId
+                      kbProps={kbRowProps(`${provider.slug}:${family.id}`)}
+                      loadingModels={loadingModels}
+                      onSelect={selectFamily}
+                      onSubOpenChange={handleSubOpenChange}
+                      openSub={openSubKey === `${provider.slug}:${family.id}`}
+                      provider={provider}
+                      providerSubtitle={providerSubtitle}
+                      search={search}
+                    />
+                  </Fragment>
+                )
+              })}
             </DropdownMenuGroup>
           ) : null}
           {groups.map(group => {
@@ -1022,6 +1043,9 @@ interface ModelFamilyRowProps {
    *  scroll so a portaled OPTIONS panel cannot drift off its trigger row. */
   openSub?: boolean
   provider: ModelOptionProvider
+  /** Short provider name under a favorite's full model id. Set only when the
+   *  section heading is not already naming that provider. */
+  providerSubtitle?: string
   search: string
   /** Paint the full model id (wrapped, no prettify/truncate). Set in the
    *  Favorites section, where the id is the row's identity. */
@@ -1045,6 +1069,7 @@ function ModelFamilyRow({
   onSubOpenChange,
   openSub = false,
   provider,
+  providerSubtitle,
   search
 }: ModelFamilyRowProps): ReactElement {
   const { t } = useI18n()
@@ -1202,6 +1227,11 @@ function ModelFamilyRow({
             >
               <HighlightMatches foldSeparators query={search} text={fullId ? family.id : name} />
             </span>
+            {providerSubtitle ? (
+              <span className="block max-w-full truncate text-[0.625rem] leading-tight text-(--ui-text-tertiary)">
+                {providerSubtitle}
+              </span>
+            ) : null}
           </span>
           {tag && !fullId ? <ModelChip>{tag}</ModelChip> : null}
           {decoration.badge ? (
@@ -1271,6 +1301,15 @@ const catalogGroupLabel =
 // in normal case and indented to the model names it labels, so it reads as
 // a sub-group rather than a sibling section.
 const favoriteProviderLabel = 'pt-1.5 pb-0 pr-2 pl-7.75 text-[0.625rem] text-(--ui-text-tertiary)'
+
+/** Drop a trailing plan/subscription parenthetical. The catalog name is the
+ *  legal label ("xAI Grok OAuth (SuperGrok / Premium+)"); a favorites heading
+ *  or row subtitle only has room for the name. */
+function shortProviderName(name: string): string {
+  const short = name.replace(/\s*\([^)]*\)\s*$/, '').trim()
+
+  return short || name
+}
 
 /** The picker's chips: a filled tag for what the model IS (its variant), an
  *  outlined one for how this row is SET (fast, effort), so the two read as
