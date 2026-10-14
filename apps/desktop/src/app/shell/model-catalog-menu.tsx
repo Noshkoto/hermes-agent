@@ -798,6 +798,7 @@ export function ModelCatalogMenu({
               <DropdownMenuLabel className={catalogGroupLabel}>{copy.favorites}</DropdownMenuLabel>
               {favoriteRows.map(({ family, provider }, index) => {
                 const providerLabel = shortProviderName(provider.name)
+
                 // A long OAuth name ("… (SuperGrok / Premium+)") is shortened
                 // once. Mixed sections name the provider in the heading; a
                 // single-provider section has no heading, so the short name
